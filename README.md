@@ -1,19 +1,19 @@
 # budget-generation-function
 Central home for the budget generation scripts used across PATH MACEPA malaria budget apps.
 
-- A single template script defines the universal generate_budget() logic.
+- A single template script defines the universal `generate_budget()` logic.
 
 - Each country folder contains a minimal copy of the template with country-specific tweaks.
 
 - Apps source the correct script directly from GitHub Raw (country first, then fallback to template).
 
 ## Repository Structure
-The repository is set up as follows:
+The repository is designed to be set up as follows:
 
 ``` 
 budget-generation-function/
 ├─ template/
-│  └─ budget-generation.R        # canonical template (master copy)
+│  └─ budget-generation.R        # canonical template (reference copy)
 ├─ ETH/
 │  └─ eth-budget-generation.R    # Ethiopia customization (optional)
 ├─ DRC/
