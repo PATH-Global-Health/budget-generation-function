@@ -37,32 +37,35 @@ Ensure you have used the correct `iso3` code to call the correct country functio
 
 ```
 load_budget_function <- function(country_iso3 = "ETH",
-                                 repo = "PATH-Org/budget-generation-function",
-                                 ref  = "main") {
+                                 repo = "budget-generation-function",
+                                 ref = "main") {
   iso3 <- toupper(country_iso3)
   iso3_l <- tolower(country_iso3)
-  
+
   # Country-specific path
   country_path <- sprintf("%s/%s-%s", iso3, iso3_l, "budget-generation.R")
   # Template path
   template_path <- "template/budget-generation.R"
-  
-  raw_base <- sprintf("https://raw.githubusercontent.com/%s/%s/", repo, ref)
-  
+
+  raw_base <- sprintf("https://raw.githubusercontent.com/PATH-Global-Health/%s/%s/", repo, ref)
+
   # Try country first; if it 404s, source template
-  try({
-    suppressMessages(source(paste0(raw_base, country_path), local = .GlobalEnv))
-  }, silent = TRUE)
-  
+  try(
+    {
+      suppressMessages(source(paste0(raw_base, country_path), local = .GlobalEnv))
+    },
+    silent = TRUE
+  )
+
   if (!exists("generate_budget", mode = "function")) {
     suppressMessages(source(paste0(raw_base, template_path), local = .GlobalEnv))
   }
-  
+
   stopifnot(exists("generate_budget", mode = "function"))
 }
 
 # Usage
-load_budget_function("ETH") 
+load_budget_function("ETH")
 ``` 
 
 ## Modifying or adding a new country
