@@ -1,0 +1,1473 @@
+---
+title: "Budget Generation Function — Partner Integration Guide"
+author: "PATH MACEPA"
+date: "2025-09-24"
+format:
+  html:
+    theme: flatly
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: show
+    df-print: paged
+    mermaid:
+      theme: forest
+editor: visual
+page-layout: article
+---
+
+> **Purpose.** This document explains how our current budget generation pipeline works end‑to‑end so partners can port the logic into their own platform. It covers data contracts (upload templates), core function interface, quantification & costing methods per intervention, output schema, and items still under development.
+
+# System overview
+
+The application ingests **(a)** intervention plans ("scenarios") and **(b)** unit cost tables, validates and merges them with population denominators and assumptions, **quantifies** commodities/services by spatial planning unit (SPU), and multiplies by unit costs to produce a **budget dataset**. Outputs are then visualised and compared across scenarios.
+
+```{mermaid}
+flowchart LR
+  A[Scenario template] --> C{generate_budget function}
+  B[Unit cost template] --> C{generate_budget function}
+  C --> D[Budget dataset - Quantities + Costs]
+  D --> E[Maps / Tables / Charts]
+```
+
+# Data contracts (upload templates)
+
+We currently have our tool set up so that we provide essential back-end data during application set-up (e.g. population data, spatial information, naming standarizations), see @nte-backenddata below for more information on these items.
+
+The user is able to populate the web-application with two excel spreadsheets that are downloaded from the tool - the scenario or intervention mix template and the unit-cost template
+
+::: {#nte-backenddata .callout-note title="Backend Data" collapse="true"}
+Below is a description of each of the sheets to be filled in and how to complete them - the essential baseline datasets required for the tool to generate a budget are <mark>highlighted.</mark>
+
++-----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| Sheet Name (EN / FR)                                | Description                                                                                                                                                                          | How to Populate                                                                                                                                                                                                                 |
++=====================================================+======================================================================================================================================================================================+=================================================================================================================================================================================================================================+
+| <mark>adm_names / admin_nom</mark>                  | The application uses adm0, adm1, adm2 and adm3 as universal identifiers of spatial units throughout the tool. Here we include the                                                    | Add plain text to the empty column, this will then propogate throughout the tool UI.                                                                                                                                            |
+|                                                     |                                                                                                                                                                                      |                                                                                                                                                                                                                                 |
+|                                                     |                                                                                                                                                                                      | e.g. Country, Region, Province                                                                                                                                                                                                  |
+|                                                     |                                                                                                                                                                                      |                                                                                                                                                                                                                                 |
+|                                                     |                                                                                                                                                                                      | Only fill to the lowest spatial unit of intervention planning/budgeting                                                                                                                                                         |
++-----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| <mark>spatial-structure / structure-spatiale</mark> | Names of the adm0, adm1,adm2 and adm3 if used areas.                                                                                                                                 | Ensure that these names match with the versions in the shapefile that you will supply to the tool.                                                                                                                              |
+|                                                     |                                                                                                                                                                                      |                                                                                                                                                                                                                                 |
+|                                                     | This will be critical for naming conventions across templates and the UI elements.                                                                                                   | The landmass in sq_km can be calculated and appended from the shapefile if unknown.                                                                                                                                             |
++-----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| urban-rural / urbain-rural                          | Optional identification of urban and rural spatial planning units.                                                                                                                   | 1 = urban                                                                                                                                                                                                                       |
+|                                                     |                                                                                                                                                                                      |                                                                                                                                                                                                                                 |
+|                                                     |                                                                                                                                                                                      | 0 = rural                                                                                                                                                                                                                       |
++-----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| <mark>population</mark>                             | Population data required for intervention qunartification. Include population sizes for the smallest intervention planning unit and for at least three to five years into the future | Total population and key population groups are required (under 5s, 0-1s, 1-2s, vaccine population, pregnant women, 5-10s, urban population)                                                                                     |
+|                                                     |                                                                                                                                                                                      |                                                                                                                                                                                                                                 |
+|                                                     |                                                                                                                                                                                      | Ensure that all population columns are filled as they will be critical for quantifying intervention commodity needs and target populations.                                                                                     |
++-----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| facility-info / info-fosa                           | Health facility information - number of primary, secondary and tertiary health facilities per spatial planning unit                                                                  | If required for any costing elements populate with the number of facilties of each type.                                                                                                                                        |
++-----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| <mark>households / menages</mark>                   | If IRS is being implemented this is critical. Specifically the total number of households or structures at the spatial planning unit.                                                | If required for any costing elements populate with the number of households and a specific year if no year is included the tool will assume the same number of households for every year of the plan.                           |
++-----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| incidence / incidence                               | Historical routine case and incidence data can be used for projecting the expected number of cases for case management quantification.                                               | Include for at least the 3 most recent years the number of confrimed, suspected and total malaria cases, population and incidence per 1000 population at the spatial planning unit.                                             |
++-----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| pfpr / prevalence                                   | Optional to record for reference any prevalence data from DHS, MIS or modelled surfaces                                                                                              | Specify the year and age group of measurement and report pfpr on a 0-1 scale.                                                                                                                                                   |
++-----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| intervention-coverage / couverture-intervention     | Optional to record for reference but could be used for budgeting at realistic coverage levels if warrented.                                                                          | At the spatial planning unit specify for at recent years the coverage levels acheieved with previously delivered interventions with the option to record the numerator and denominator used in those calculations if available. |
++-----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| sources                                             | Record where data was sourced from and when.                                                                                                                                         |                                                                                                                                                                                                                                 |
++-----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+:::
+
+## Scenario template (intervention mix)
+
+[Click here to download the scenario template](manual-extras/scenario-template-EN.xlsx).
+
+-   **Sheets:** each sheet corresponds to a year that was specified in the tool at download.
+-   **Grain:** each row is one spatial targeting unit e.g. Health Zone in DRC or LGA in Nigeria.
+-   **SPU keys:** `adm1`, `adm2`, `adm3` (as applicable to country), this data will be pre-populated by the tool at the correct level of intervention targeting – do not make changes to these values in cells.
+-   **Descriptor fields:** `scenario_name`, `scenario_description`, these get added to the scenario mix during upload back into the tool.
+-   **Intervention targeting:** `code_*` columns (0/1), one per deliverable intervention.
+-   **Intervention type selectors:** `type_*` columns (drop‑downs aligned one-to-one with `code_*`).
+
+The figure below gives an example of what this looks like.
+
+![Intervention Mix Template](manual-extras/scenario-template-image-EN.png){.lightbox}
+
+Once a plan has been specified by indicating what interventions are to be targeted where each year the user can save a local copy of this file. Return to the web application and upload the completed Excel file using the Upload button. Give the scenario a short name: e.g. “Plan 1 BAU” and a description: e.g. “Basic mix of interventions – mass campaigns, case management and targeted SMC” – making sure these are informative descriptions as it will be helpful when comparing plans.
+
+> -   Sheets are per year; one workbook can cover multiple years.
+> -   The app pre-populates SPU keys; users must not edit the geometry keys.
+> -   Some interventions are missing e.g. MDA and Entomological Surveillance and current specification for the type of Private Sector case management that is to be implemented and we are waiting on discussions with country programs to finalise this.
+
+## Unit Cost template
+
+[Click here to download the unit-cost template](manual-extras/cost-template-EN.xlsx).
+
+-   **Sheets:** `Instructions` template on how to fill in the `unit-cost-data` sheet, we also include a `supplementary-data` sheet to highlight to the user they are able to add any addiditional sheets into the excel workbook for tracking line-lists or unit-cost calculations for example.
+
+-   **Grain:** one unit cost line per `(code_intervention, type_intervention, unit, cost_year_for_analysis)`.
+
+-   **Required columns:** Columns **A : J** are required for calculations and their **names must not change**
+
+    -   `code_intervention`: Select from the drop down the correct intervention that cost relates to - the code will match with the columns in the `code_` cells of the scenario template.
+
+    -   `type_intervention`: Select from the drop down list the specific type of intervention the cost relates to. These values relate to the `type_` column in the scenario template. If the user wants to include any **fixed costs** for an intervention this is also specified in this column e.g. Fixed costs for annual warehousing of bednets during a campaign. **This value must be filled in for the application to include the unit-cost correctly**.
+
+    -   `cost_class`: Select from the drop down - `Procurement`, `Delivery`, `Operational`, `Support`, `Other` (with detail in `cost_class_other`).
+
+    -   `cost_class_other`: If selecting `other` in `cost_class` detail what this is.
+
+    -   `description`: Free text to provide a short description of the components of the unit cost e.g. *Net storage costs for Global Fund Warehousing per year*
+
+    -   `unit`: Select from the drop down list the specific unit for the cost e.g. *Per Net*, *Per Child*, *Per Dose*, *Per Year* etc. If the requried unit is not listed they can be added by the technical team.
+
+    -   `local_currency_cost`: Monetary value for the specific unit cost in National Currency.
+
+    -   `exchange_rate`: Exchange rate to convert from National to USD to populate unit cost values in the `usd_cost` column or vice versa with the `local_currency_cost` column.
+
+    -   `usd_cost`: Monetary value for the specific unit cost in USD.
+
+    -   `cost_year_for_analysis`: This value is the year of the operational plan that the unit cost should be used to calculate the budget for. If this column is left blank the same unit cost will be applied for every year of delivery in the specified plan. But there may be instances especially where the unit-cost is expected to change year on year e.g. Vaccine procurement as a result of changes in Gavi co-financing.
+
+-   **Addiditional columns:** To allow for ease of conversion of unit cost estimates that are generated from historical data to current monetary values we include the following columns:
+
+    -   `original_unit_cost`: Unit-cost calculated from historial budgets or expenditures.
+
+    -   `original_unit_cost_year`: The year of the data used to claculate the unit-cost.
+
+    -   `inflation_factor`: Inflation rate applied to the `original_unit_cost` to scale to current or future values.
+
+    -   `notes`: Any helpful details surrounding unit cost data or things to be aware of.
+
+    -   `source`: Data source.
+
+::: callout-important
+Sheet cells **do not** contain pre-specified formulas it is up to the user to enter or calculate data as they see appropriate.
+
+The template is prepopulated with some common interventions, types of intervention, cost classes and units – these rows can be edited and/or deleted as the user requires but ensure that for each intervention being delivered in the operational plan there are unit costs for the specific intervention and intervention type. You can add extra rows but if there are any missing critical items from the unit cost spreadsheet this should be discussed with the the technical team to integrate
+:::
+
+![Unit-cost Template](manual-extras/unit-template-image-EN.png){.lightbox}
+
+# Core function interface
+
+The engine is a single, pure function. We keep the name and signature identical across our different country instances so the app can call it uniformly. Any country specific modifications stem from changes to the input spreadsheets or core calculation logic.
+
+The following details the **base function** that we include as a *template* building block for all of our country applications. Currently we do not include methodology for quantifying and costing all of the avaliable core malaria control interventions or support services as we intend to discuss and finalise methodology with our country partners during the CO-OP processes that are currently underway - see @nte-missing for more details on these.
+
+The base function exists in the [budget-generation-function](https://github.com/PATH-Global-Health/budget-generation-function/tree/main) repo `template` folder and the template for the full application exists in the [malaria-budget-tool-template](https://github.com/PATH-Global-Health/malaria-budget-tool-template) repo.
+
+:::{.callout-important}
+This version is the suggested format and code to build into your own applications if you should choose - this version superceeds any perviously shared versions. 
+
+Once we have customised versions incorporating the specifics of the DRC and Nigeria we will update the country specific folders on the [budget-generation-function](https://github.com/PATH-Global-Health/budget-generation-function/tree/main) repo and update you on this. 
+:::
+
+
+## Function arguments
+
+``` r
+#' Generate detailed intervention budget from scenarios & costs
+#'
+#' Quantifies product/service needs from scenario coverage, applies unit costs,
+#' and returns a long-form budget suitable for tables/maps/plots.
+#'
+#' @param scen_data Data frame of implementation scenarios. Must include columns:
+#'   - Spatial keys: `adm1`, `adm2` (and optionally `adm3`) depending on SPU.
+#'   - `year`, `scenario_name`, `scenario_description`
+#'   - intervention code columns like `code_itn_campaign`, `code_itn_routine`, `code_iptp`,
+#'     `code_smc`, `code_pmc`, `code_vacc`, and corresponding `type_*` columns.
+#' @param cost_data Data frame of unit/delivery costs containing at least:
+#'   `code_intervention`, `type_intervention`, `unit`, `local_currency_cost`, `usd_cost`,
+#'   and `cost_year_for_analysis` (may be NA, matched to scenario year if so).
+#' @param assumptions Character vector of "Label = value" strings; optional.
+#'
+#' @return A data frame with columns (subset depends on SPU):
+#'   `adm1`, `adm2`, `adm3`, `year`, `scenario_name`, `scenario_description`,
+#'   `cost_name`, `cost_description`, `code_intervention`, `type_intervention`,
+#'   `target_pop`, `unit`, `quantity`, `cost_class`, `currency`, `unit_cost`,
+#'   `cost_element`, `intervention_nice`, `assumptions_changes`, `assumption_type`, `plan_id`.
+#'
+#' @details
+#' - Uses global `spatial_planning_unit` set to one of `"adm1"/"adm2"/"adm3"`.
+#' - Uses global `local_currency_symbol` (labels non-USD currency rows).
+#' - Requires global `target_population` table with the necessary population columns.
+#' - Parses assumptions from strings of the form `"Label = value"`.
+#' - Treats rows where `type_intervention == "Fixed cost"` as national fixed costs.
+#' - Keeps both currencies by pivoting `*_cost` columns to `currency` and `unit_cost`.
+#' - `plan_id` is derived from `scenario_name`, `cost_name`, and assumption state.
+#'
+#' @noRd
+generate_budget <- function(scen_data, cost_data, assumptions) {
+```
+
+### Currency columns expected in `cost_data`
+
+-   `local_currency_cost` and `usd_cost` are **both** supported. The function pivots these to a single `currency` column (values: `USD` or the `local_currency_symbol`) and a numeric `unit_cost`.
+-   Costs will only be calculated if the `code_intervention` and `type_intervention` columns are filled as these are critical for our joins.
+
+### Spatial planning unit (SPU) behavior
+
+-   SPU is read from the global `spatial_planning_unit`. Allowed values are `adm1`, `adm2`, `adm3`; any other value falls back to `adm2` with a warning.
+-   Output includes only the geo keys for the active SPU level (e.g., `adm1` only for SPU=`adm1`; `adm1, adm2` for SPU=`adm2`, etc.).
+
+### Assumptions interface
+
+A key part of the budget generation is allowing the user to select in the application whether or not to accept key assumptions in the quantification methods. For example the Program may be interested in comparing scenarios where the number of vaccine doses is reduced, the target population for SMC is expanded to children under 10 or an intervention coverage decreases, all of these aspects can be incorporated through the assumption adjustments.
+
+-   Provide overrides as a **character vector** like `c("ITN Campaign: people per net = 1.8", "SMC: cycles = 4")`.
+-   The parser evaluates the right-hand side; unknown labels are ignored with a warning.
+-   The function computes a human-readable summary in `assumptions_changes` and flags baseline vs adjusted in `assumption_type`.
+
+# Processing workflow
+
+This reflects the exact steps in the current implementation and the units/labels emitted per intervention.
+
+## Environment & inputs
+
+1.  **SPU & currency**: read `spatial_planning_unit` and `local_currency_symbol` from globals; validate SPU; derive `spu_cols`.
+2.  **Scenario summary (console)**: identify all `code_*` columns, coerce to 0/1, and print a per-intervention targeted-area count by year.
+3.  **Cost data prep**:
+    -   Filter to rows with `local_currency_cost` present to remove empty rows.
+    -   Normalize `cost_year_for_analysis` to integer.
+    -   **Year expansion & matching**: cross scenario years with cost rows; if a cost row’s `cost_year_for_analysis` is `NA`, substitute scenario `year`; finally filter to `cost_year_for_analysis == year`.
+
+```{r eval = FALSE, collapse=TRUE}
+#| code-fold: hide
+ # --- ENV OPTIONS ----------------------------------------------------------
+  # spatial level + currency symbol
+  spu <- get("spatial_planning_unit", envir = .GlobalEnv) %||% "adm2"
+  local_symbol <- get("local_currency_symbol", envir = .GlobalEnv) %||% "LOCAL"
+
+  # validate spatial_planning_unit
+  if (!spu %in% c("adm1", "adm2", "adm3")) {
+    warning("Unrecognized spatial_planning_unit = '", spu, "'. Falling back to 'adm2'.")
+    spu <- "adm2"
+  }
+
+  # Which spatial columns to include in outputs / joins
+  spu_cols <- switch(spu,
+    "adm1" = c("adm1"),
+    "adm2" = c("adm1", "adm2"),
+    "adm3" = c("adm1", "adm2", "adm3")
+  )
+
+  sel_spu <- function(...) dplyr::all_of(c(spu_cols, ...))
+
+  # --- CONSOLE SUMMARY ------------------------------------------------------
+  cat("Costing scenario being generated for the following mix of interventions:\n")
+
+  code_cols <- grep("^code_", names(scen_data), value = TRUE)
+  if (length(code_cols) == 0L) {
+    cat("No intervention columns starting with 'code_'; skipping summary.\n")
+  } else {
+    has1 <- "adm1" %in% names(scen_data)
+    has2 <- all(c("adm1", "adm2") %in% names(scen_data))
+    has3 <- all(c("adm1", "adm2", "adm3") %in% names(scen_data))
+
+    summary_tbl <-
+      scen_data %>%
+      dplyr::mutate(
+        year = suppressWarnings(as.integer(year)),
+        adm1_key = if (has1) adm1 else NA_character_,
+        adm2_key = if (has2) paste(adm1, adm2, sep = "_") else NA_character_,
+        adm3_key = if (has3) paste(adm1, adm2, adm3, sep = "_") else NA_character_
+      ) %>%
+      dplyr::select(
+        dplyr::any_of(c(
+          spu_cols, "year", "scenario_name", "scenario_description",
+          code_cols, "adm1_key", "adm2_key", "adm3_key"
+        ))
+      ) %>%
+      tidyr::pivot_longer(
+        dplyr::all_of(code_cols),
+        names_to = "intervention",
+        names_prefix = "code_",
+        values_to = "included"
+      ) %>%
+      dplyr::mutate(
+        included = dplyr::case_when(
+          is.logical(included) ~ as.integer(included),
+          is.numeric(included) ~ as.integer(included == 1),
+          is.character(included) ~ as.integer(tolower(trimws(included)) %in% c("1", "true", "yes", "y")),
+          TRUE ~ 0L
+        )
+      ) %>%
+      dplyr::filter(included == 1L) %>%
+      dplyr::group_by(intervention, year) %>%
+      dplyr::summarise(
+        adm1_targeted = if (has1) dplyr::n_distinct(adm1_key[!is.na(adm1_key)]) else NA_integer_,
+        adm2_targeted = if (has2) dplyr::n_distinct(adm2_key[!is.na(adm2_key)]) else NA_integer_,
+        adm3_targeted = if (has3) dplyr::n_distinct(adm3_key[!is.na(adm3_key)]) else NA_integer_,
+        .groups = "drop"
+      )
+    print(summary_tbl)
+  }
+
+  cat(scen_data$scenario_description[1] %||% "", "\n")
+
+  # --- COST DATA ------------------------------------------------------------
+  cost_data <- cost_data |>
+    dplyr::filter(!is.na(local_currency_cost)) |>
+    dplyr::mutate(cost_year_for_analysis = as.integer(cost_year_for_analysis))
+
+  cost_data_expanded <- scen_data |>
+    dplyr::distinct(year) |>
+    tidyr::crossing(cost_data) |>
+    dplyr::mutate(
+      cost_year_for_analysis = dplyr::if_else(is.na(cost_year_for_analysis), year, cost_year_for_analysis)
+    ) |>
+    dplyr::filter(cost_year_for_analysis == year)
+```
+
+## Assumption parsing & defaults
+
+-   Assumptions are parsed from labeled strings. Key labels include (examples):
+    -   **ITN Campaign**: `people per net`, `nets per bale`, `buffer (%)`, `target population`, `target population coverage`.
+    -   **ITN Routine**: `target population`, `target population coverage`, `buffer (%)`.
+    -   **IPTp**: `ANC attendance`, `contact points`, `drug supply buffer`.
+    -   **SMC**: `age targeting` (e.g., proportion of under 5 population aged 3-11 months or 12-59 months `"0.18,0.77"`), `cycles`, `target population coverage`, `drug supply buffer`.
+    -   **PMC**: `coverage`, `contact points`, `nutrition scaling factor`, `drug supply buffer`.
+    -   **Vaccine**: `coverage`, `number of doses`, `supply buffer`.
+-   Helper maps assumption labels like **“Total population”**, **“Children under 5”**, **“Pregnant women”** to canonical population columns in `target_population` (e.g., `pop_total`, `pop_0_5`, `pop_pw`, etc.).
+
+```{r eval = FALSE, collapse=TRUE}
+#| code-fold: hide
+# --- ASSUMPTIONS ----------------------------------------------------------
+  assumptions <- unlist(assumptions)
+  target_population <- target_population
+
+  if (!is.null(assumptions) && length(assumptions) > 0) {
+    assumption_list <- purrr::map_chr(assumptions, ~.x) |>
+      rlang::set_names(purrr::map_chr(strsplit(assumptions, " = "), 1)) |>
+      purrr::map(~ eval(parse(text = strsplit(.x, " = ")[[1]][2])))
+  } else {
+    assumption_list <- list()
+  }
+
+  get_assumption <- function(label, default) {
+    if (!is.null(assumption_list[[label]])) assumption_list[[label]] else default
+  }
+
+  itn_campaign_divisor <- get_assumption("ITN Campaign: people per net", 1.8)
+  itn_campaign_bale_size <- get_assumption("ITN Campaign: nets per bale", 50)
+  itn_campaign_buffer_mult <- 1 + get_assumption("ITN Campaign: buffer (%)", 0.10)
+  itn_campaign_coverage <- get_assumption("ITN Campaign: target population coverage", 1.00)
+
+  itn_routine_coverage <- get_assumption("ITN Routine: target population coverage", 0.30)
+  itn_routine_buffer_mult <- 1 + get_assumption("ITN Routine: buffer (%)", 0.10)
+
+  iptp_anc_coverage <- get_assumption("IPTp: ANC attendance", 0.80)
+  iptp_doses_per_pw <- get_assumption("IPTp: contact points", 3)
+  iptp_buffer_mult <- 1 + get_assumption("IPTp: drug supply buffer", 0.10)
+
+  smc_age_string <- get_assumption("SMC: age targeting", "0.18,0.77")
+  smc_split <- as.numeric(strsplit(smc_age_string, ",")[[1]])
+  smc_pop_prop_3_11 <- smc_split[1]
+  smc_pop_prop_12_59 <- smc_split[2]
+  smc_coverage <- get_assumption("SMC: target population coverage", 1.00)
+  smc_monthly_rounds <- get_assumption("SMC: cycles", 4)
+  smc_buffer_mult <- 1 + get_assumption("SMC: drug supply buffer", 0.10)
+
+  pmc_coverage <- get_assumption("PMC: coverage", 0.85)
+  pmc_touchpoints <- get_assumption("PMC: contact points", 4)
+  pmc_tablet_factor <- get_assumption("PMC: nutrition scaling factor", 0.75)
+  pmc_buffer_mult <- 1 + get_assumption("PMC: drug supply buffer", 0.10)
+
+  vacc_coverage <- get_assumption("Vaccine: coverage", 0.84)
+  vacc_doses_per_child <- get_assumption("Vaccine: number of doses", 4)
+  vacc_buffer_mult <- 1 + get_assumption("Vaccine: supply buffer", 0.10)
+
+  get_pop_column <- function(label, default_col) {
+    pop_assumption <- assumption_list[[label]]
+    if (is.null(pop_assumption)) {
+      return(default_col)
+    }
+
+    mapping <- list(
+      "Total population"                           = "pop_total",
+      "Children under 5"                           = "pop_0_5",
+      "Children under 5 and pregnant women"        = c("pop_0_5", "pop_pw"),
+      "Children under 10"                          = c("pop_0_5", "pop_5_10"),
+      "Children 3 months to 5 years"               = "pop_0_5",
+      "Children 3 months to 10 years"              = c("pop_0_5", "pop_5_10"),
+      "Children 0-1"                               = "pop_0_1",
+      "Children 1-2"                               = "pop_1_2",
+      "Children 5-10"                              = "pop_5_10",
+      "Children 5–36 months"                       = "pop_vaccine_5_36_months",
+      "Pregnant women"                             = "pop_pw",
+      "Urban population"                           = "pop_urban"
+    )
+
+    mapped_col <- mapping[[pop_assumption]]
+    if (!is.null(mapped_col)) {
+      mapped_col
+    } else {
+      warning(paste("Unrecognized target population assumption:", pop_assumption))
+      default_col
+    }
+  }
+
+  itn_campaign_pop_col <- get_pop_column("ITN Campaign: target population", "pop_total")
+  itn_routine_pop_col <- get_pop_column("ITN Routine: target population", c("pop_0_5", "pop_pw"))
+  smc_pop_col <- get_pop_column("SMC: target population", "pop_0_5")
+```
+
+## Quantification by intervention
+
+Below, `target_pop` always reflects coverage-adjusted counts where applicable; units are normalized to friendly labels - that will match those that are specified in the drop down lists of the unit-cost template to allow for joining of commodity quantification data and unit cost data for cost calculations. All intervention quantifications are claculated at the level of the `spatial_planning_unit`.
+
+### ITN — Campaign (`code_itn_campaign`)
+
+To estimate the number of insecticide-treated nets (ITNs) needed for campaign delivery in targeted areas:
+
+The **target population** (default: total pop) of the area is multiplied by the **target intervention coverage** (default: 100%) to estimate the target population for the campaign and then divided by the **number of people assumed to use 1 net** (default: 1.8). A **buffer** (default: 10%) is applied to account for wastage and contingency. The number of **bales** is calculated by dividing the number of nets by 50 (assuming 50 nets per bale).
+
+$${ITNs Needed} =  \frac{(Target Population * Coverage)}{PeoplePerNet}Buffer  $$
+
+```{r eval = FALSE, collapse=TRUE}
+#| code-fold: hide
+# --- ITN CAMPAIGN ----------------------------------------------------------
+  itn_campaign_quantifications <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("itn_campaign"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_itn_campaign == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", itn_campaign_pop_col))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::rowwise() |>
+    dplyr::mutate(target_pop = sum(dplyr::c_across(dplyr::all_of(itn_campaign_pop_col)), na.rm = TRUE)) |>
+    dplyr::ungroup() |>
+    dplyr::select(-dplyr::all_of(itn_campaign_pop_col)) |>
+    dplyr::mutate(
+      quant_nets = ((target_pop * itn_campaign_coverage) / itn_campaign_divisor) * itn_campaign_buffer_mult,
+      quant_bales = quant_nets / itn_campaign_bale_size,
+      target_pop = target_pop * itn_campaign_coverage,
+      code_intervention = "itn_campaign",
+      type_intervention = type_itn_campaign
+    ) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_"
+    ) |>
+    dplyr::mutate(unit = dplyr::case_when(
+      unit == "nets" ~ "per ITN",
+      unit == "bales" ~ "per bale",
+      TRUE ~ unit
+    ))
+
+```
+
+### ITN — Routine (`code_itn_routine`)
+
+To estimate the number of nets needed for routine delivery channels often through ANC and EPI services, the **target population** (default: total under 5 and pregnant women population) of an area is multiplied by the **expected routine distribution coverage** (default: 30%) and a **procurement buffer** (default: 10%).
+
+$$ITNs Needed =  Target Population * Coverage * Buffer  $$
+
+```{r eval = FALSE, collapse=TRUE}
+#| code-fold: hide
+
+# --- ITN ROUTINE -----------------------------------------------------------
+  itn_routine_quantifications <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("itn_routine"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_itn_routine == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", itn_routine_pop_col))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::rowwise() |>
+    dplyr::mutate(target_pop = sum(dplyr::c_across(dplyr::all_of(itn_routine_pop_col)), na.rm = TRUE)) |>
+    dplyr::ungroup() |>
+    dplyr::select(-dplyr::all_of(itn_routine_pop_col)) |>
+    dplyr::mutate(
+      quant_nets = (target_pop * itn_routine_coverage) * itn_routine_buffer_mult,
+      code_intervention = "itn_routine",
+      type_intervention = type_itn_routine
+    ) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_"
+    ) |>
+    dplyr::mutate(unit = dplyr::case_when(
+      unit == "nets" ~ "per ITN",
+      unit == "bales" ~ "per bale",
+      TRUE ~ unit
+    ))
+```
+
+### IPTp (`code_iptp`)
+
+To estimate the amount of SP (blister packs of 3 pills) to procure for IPTp we take the **target population** (default: pregnant women) of an area, multiply by the **expected coverage at ANC attendence** (default: 80%) for the scheduled number of **touchpoints** per woman (default: 3) and multiply this by a **procurement buffer** (default: 10%).
+
+$$SP Quantity =  Target Population * Coverage * Touch Points * Buffer  $$
+
+```{r eval = FALSE, collapse=TRUE}
+#| code-fold: hide
+
+# --- IPTp ------------------------------------------------------------------
+  iptp_quantifications <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("iptp"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_iptp == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", "pop_pw"))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::mutate(
+      quant_sp_doses = ((pop_pw * iptp_anc_coverage) * iptp_doses_per_pw) * iptp_buffer_mult,
+      target_pop = pop_pw,
+      code_intervention = "iptp",
+      type_intervention = type_iptp
+    ) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_"
+    ) |>
+    dplyr::mutate(unit = dplyr::case_when(unit == "sp_doses" ~ "per SP", TRUE ~ unit))
+```
+
+### SMC (`code_smc`)
+
+To estimate the number of SP+AQ co-blistered packets required for Seasonal Malaria Chemoprevention (SMC), we use the following methodology with the default assumptions included here for clarity. We first assume each packet contains one full course for a single cycle (1 tablet of SP and 3 tablets of AQ). SMC is at default delivered over 4 **monthly cycles** and *targets two age groups*: children aged 3 to \<12 months and children aged \>12 to 59 months. We include the distribution of age-groups as the procurement costs of the co-blistered packets for these different age groups vary as a result of the age-based dosing requirements for SMC drugs.
+
+We first estimate the **target population** by applying fixed proportions to the total number of children under 5 years of age. **Coverage** of the target population is assumed to be 100%, unless otherwise specified, and is applied before the buffer is calculated. A **10% buffer** is then included to account for re-dosing, wastage, and the treatment of children from outside the catchment area.
+
+$$SMCBlisterPacks_{age-group} =  (TargetPopulation_{age-group} * Coverage * Monthly Cycles) * Buffer $$
+
+```{r eval = FALSE, collapse=TRUE}
+#| code-fold: hide
+
+# --- SMC -------------------------------------------------------------------
+  include_5_10 <- any(grepl("5_10", smc_pop_col))
+  smc_quantification <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("smc"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_smc == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", smc_pop_col))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::mutate(
+      quant_smc_spaq_3_11_months = ((pop_0_5 * smc_pop_prop_3_11) * smc_coverage) * smc_monthly_rounds * smc_buffer_mult,
+      quant_smc_spaq_12_59_months = ((pop_0_5 * smc_pop_prop_12_59) * smc_coverage) * smc_monthly_rounds * smc_buffer_mult,
+      quant_smc_spaq_5_10_years = if (include_5_10) (pop_5_10 * smc_coverage) * smc_monthly_rounds * smc_buffer_mult else 0,
+      quant_smc_child = if (include_5_10) {
+        ((pop_0_5 * (smc_pop_prop_3_11 + smc_pop_prop_12_59)) + pop_5_10) * smc_coverage
+      } else {
+        (pop_0_5 * (smc_pop_prop_3_11 + smc_pop_prop_12_59)) * smc_coverage
+      },
+      target_pop = quant_smc_child,
+      code_intervention = "smc",
+      type_intervention = type_smc
+    ) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_smc_"
+    ) |>
+    dplyr::mutate(
+      unit = dplyr::case_when(
+        unit == "spaq_3_11_months" ~ "per SPAQ pack 3-11 month olds",
+        unit == "spaq_12_59_months" ~ "per SPAQ pack 12-59 month olds",
+        unit == "spaq_5_10_years" ~ "per SPAQ pack 5–10 years old",
+        unit == "child" ~ "per child",
+        TRUE ~ unit
+      )
+    )
+
+```
+
+### PMC (`code_pmc`)
+
+To estimate the quantity of sulfadoxine-pyrimethamine (SP) required for Perennial Malaria Chemoprevention (PMC), we assume delivery is integrated into routine Expanded Programme on Immunization (EPI). Each eligible child receives SP at four routine immunization touchpoints per year, with age-specific dosing:
+
+-   Children aged **0–1 years** receive **1 tablet** of SP per contact.
+
+-   Children aged **1–2 years** receive **2 tablets** of SP per contact.
+
+To account for **underdosing due to low weight**, which affects approximately **25% of children in each age group**, a **scaling factor of 0.75** is applied to both age groups. This factor reflects the average reduction in tablets required due to dose adjustment (e.g., half tablets for underweight infants).
+
+An **85% coverage rate** is assumed and a **10% procurement buffer** is then included to cover wastage, re-dosing, and stockouts.
+
+$$SP Quantity = [(pop_{0-1} * tablet_{0-1}) + (pop_{1-2} * tablet_{1-2})] * Coverage * ScalingFactor * Touchpoints * Buffer $$
+
+```{r eval = FALSE, collapse=TRUE}
+#| code-fold: hide
+
+# --- PMC -------------------------------------------------------------------
+  pmc_quantification <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("pmc"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_pmc == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", "pop_0_1", "pop_1_2"))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::mutate(
+      quant_pmc_sp_0_1_years = pop_0_1 * pmc_coverage * pmc_touchpoints * pmc_tablet_factor * pmc_buffer_mult,
+      quant_pmc_sp_1_2_years = pop_1_2 * pmc_coverage * pmc_touchpoints * 2 * pmc_tablet_factor * pmc_buffer_mult,
+      quant_pmc_sp_total     = quant_pmc_sp_0_1_years + quant_pmc_sp_1_2_years,
+      quant_pmc_child        = pop_0_1 * pmc_coverage + pop_1_2 * pmc_coverage,
+      target_pop             = quant_pmc_child,
+      code_intervention      = "pmc",
+      type_intervention      = type_pmc
+    ) |>
+    dplyr::select(-quant_pmc_sp_0_1_years, -quant_pmc_sp_1_2_years) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_pmc_"
+    ) |>
+    dplyr::mutate(
+      unit = dplyr::case_when(
+        unit == "sp_total" ~ "per SP",
+        unit == "child" ~ "per child",
+        TRUE ~ unit
+      )
+    )
+
+```
+
+### Vaccine (`code_vacc`)
+
+To estimate the number of malaria vaccine doses required, at default, we assume each eligible child will receive a **4-dose schedule**. Assuming the first three doses are delivered monthly and start around 5 months of age and the 4th dose is delivered \~12 – 15 months following the 3rd dose. The vaccine is delivered through *routine immunization contacts* with an **expected coverage of 84%** among the target population. A 10% buffer is included to account for losses during transportation, storage, and administration.
+
+$$VaccineDoses = Target Pop * Coverage * DosesPerChild * Buffer $$
+
+```{r eval = FALSE, collapse=TRUE}
+#| code-fold: hide
+
+# --- VACCINE ---------------------------------------------------------------
+  vacc_quantification <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("vacc"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_vacc == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", "pop_vaccine_5_36_months"))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::mutate(
+      quant_vacc_doses = pop_vaccine_5_36_months * vacc_coverage * vacc_buffer_mult * vacc_doses_per_child,
+      quant_vacc_child = pop_vaccine_5_36_months * vacc_coverage,
+      target_pop = quant_vacc_child,
+      code_intervention = "vacc",
+      type_intervention = type_vacc
+    ) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_vacc_"
+    ) |>
+    dplyr::mutate(
+      unit = dplyr::case_when(
+        unit == "doses" ~ "per dose",
+        unit == "child" ~ "per child",
+        TRUE ~ unit
+      )
+    )
+```
+
+### Baseline assumptions (defaults summary)
+
+| Parameter              | Default | Notes                    |
+|------------------------|--------:|--------------------------|
+| `people_per_net`       |     1.8 | ITN campaign             |
+| `itn_campaign_cov`     |    1.00 | 100% of total population |
+| `nets_per_bale`        |      50 |                          |
+| `buffer`               |    0.10 | applied post‑coverage    |
+| `itn_routine_cov`      |    0.30 | of U5 + pregnant women   |
+| `iptp_anc_cov`         |    0.80 | ANC attendance proxy     |
+| `iptp_touchpoints`     |       3 | per pregnancy            |
+| `smc_cycles`           |       4 | monthly                  |
+| `smc_cov`              |    1.00 | of target population     |
+| `u5_split_3_11`        |    0.18 | fraction of U5           |
+| `u5_split_12_59`       |    0.77 | fraction of U5           |
+| `pmc_touchpoints`      |       4 | via EPI                  |
+| `pmc_nutrition_factor` |    0.75 | dose scaling             |
+| `pmc_cov`              |    0.85 | EPI coverage             |
+| `vac_doses_per_child`  |       4 | RTS,S or R21             |
+| `vac_cov`              |    0.84 | EPI coverage             |
+| `vac_wastage`          |    0.10 | buffer/wastage           |
+
+Users may override any parameter via the specific selections in the UI.
+
+## Intervention costing
+
+Quantified dataframes get joined with the `cost_data_expanded` (accounting for the years in the scenario), and are joined on `c("code_intervention", "type_intervention", "unit", "year" = "cost_year_for_analysis")`.
+
+Once joined we simply pivot longer to ensure we have one row for each of the different `currency` types and costs are calculated by multiplying the `quantity * unit_cost`.
+
+```{r eval=FALSE, collapse=TRUE}
+#| code-fold: true
+# --- COMBINE & COST --------------------------------------------------------
+  budget <-
+    dplyr::bind_rows(
+      safe_quantification(itn_campaign_quantifications),
+      safe_quantification(itn_routine_quantifications),
+      safe_quantification(iptp_quantifications),
+      safe_quantification(smc_quantification),
+      safe_quantification(pmc_quantification),
+      safe_quantification(vacc_quantification)
+    ) |>
+    dplyr::left_join(
+      cost_data_expanded |> dplyr::select(-year, -original_unit_cost),
+      by = c("code_intervention", "type_intervention", "unit", "year" = "cost_year_for_analysis")
+    ) |>
+    tidyr::pivot_longer(
+      cols = tidyselect::ends_with("_cost"),
+      names_to = "currency",
+      values_to = "unit_cost"
+    ) |>
+    dplyr::mutate(
+      cost_element = quantity * unit_cost,
+      currency = dplyr::if_else(currency == "usd_cost", "USD", local_symbol),
+      intervention_nice = dplyr::case_when(
+        code_intervention == "cm_public" ~ "Case Management Public",
+        code_intervention == "cm_private" ~ "Case Management Private",
+        code_intervention == "iptp" ~ "IPTp",
+        code_intervention == "vacc" ~ "Vaccine",
+        code_intervention == "itn_routine" ~ "Routine ITN",
+        code_intervention == "itn_campaign" ~ "Campaign ITN",
+        code_intervention == "smc" ~ "SMC",
+        code_intervention == "pmc" ~ "PMC",
+        code_intervention == "irs" ~ "IRS",
+        code_intervention == "lsm" ~ "LSM",
+        TRUE ~ code_intervention
+      )
+    ) |>
+    dplyr::select(
+      dplyr::all_of(spu_cols), year,
+      scenario_name, scenario_description,
+      cost_name, cost_description,
+      code_intervention, type_intervention,
+      target_pop, unit, quantity,
+      cost_class, currency, unit_cost, cost_element,
+      intervention_nice
+    ) |>
+    dplyr::filter(cost_element != 0)
+```
+
++--------------+-------------------------------------------------------------------------------------------+
+| Intervention | Cost Component Examples                                                                   |
++==============+===========================================================================================+
+| ITN Campaign | -   **Procurement cost** = Number of nets × unit cost per net.                            |
+|              |                                                                                           |
+|              | -   **Delivery cost** = Number of nets or bales x unit delivery cost per net or bale.     |
+|              |                                                                                           |
+|              | -   **Operational campaign costs** = Number of nets × operational cost per net.           |
++--------------+-------------------------------------------------------------------------------------------+
+| ITN Routine  | -   **Procurement cost** = Number of nets × unit cost per net.                            |
+|              |                                                                                           |
+|              | -   **Delivery cost** = Number of nets x unit delivery cost per net.                      |
+|              |                                                                                           |
+|              | -   **Operational costs** = Number of nets × operational cost per net.                    |
++--------------+-------------------------------------------------------------------------------------------+
+| IPTp         | -   **Procurement cost** = SP quantity × procurement unit cost per SP.                    |
+|              |                                                                                           |
+|              | -   **Delivery cost** = SP quantity x delivery unit cost per SP.                          |
++--------------+-------------------------------------------------------------------------------------------+
+| SMC          | -   **Procurement cost** = SP+AQ quantity × procurement unit cost per SP+AQ.              |
+|              |                                                                                           |
+|              | -   **Delivery cost** = SP+AQ quantity x delivery unit cost per SP+AQ.                    |
+|              |                                                                                           |
+|              | -   **Operational cost** = Target Population x operational unit cost per child.           |
++--------------+-------------------------------------------------------------------------------------------+
+| PMC          | -   **Procurement cost** = SP quantity × procurement unit cost per SP.                    |
+|              |                                                                                           |
+|              | -   **Delivery cost** = SP quantity x delivery unit cost per SP.                          |
+|              |                                                                                           |
+|              | -   **Operational cost** = Target Population x operational unit cost per child or per SP. |
++--------------+-------------------------------------------------------------------------------------------+
+| Vaccine      | -   **Procurement cost** = Dose quantity × procurement unit cost per dose.                |
+|              |                                                                                           |
+|              | -   **Delivery cost** = Dose quantity x delivery unit cost per dose.                      |
+|              |                                                                                           |
+|              | -   **Operational cost** = Target Population x operational unit cost per child.           |
++--------------+-------------------------------------------------------------------------------------------+
+
+## Fixed Costs
+
+Fixed costs (do not vary directly with units delivered), we currently have fixed costs implemented minimally but these will be **further developed** once we understand expected fixed costs from country programs.
+
+1.  **Lump sum Nationally** : Include as an interventio specific single line in the final budget that will be incorporated when summing budgets at the national level .
+2.  **Embedded in unit costs**: incorporate within delivery or procurement unit costs during costing.
+
+```{r eval=FALSE, collapse=TRUE}
+#| code-fold: true
+# Fixed costs (national-level currently)
+  fixed_budget <- cost_data_expanded |>
+    dplyr::filter(type_intervention == "Fixed cost") |>
+    tidyr::pivot_longer(
+      cols = tidyselect::ends_with("_cost"),
+      names_to = "currency",
+      values_to = "unit_cost"
+    ) |>
+    dplyr::mutate(
+      currency = dplyr::if_else(currency == "usd_cost", "USD", local_symbol),
+      adm1 = NA_character_, adm2 = NA_character_, adm3 = NA_character_,
+      scenario_name = unique(scen_data$scenario_name)[1],
+      scenario_description = unique(scen_data$scenario_description)[1],
+      cost_name = cost_data$cost_name[1],
+      cost_description = cost_data$cost_description[1],
+      target_pop = NA_real_,
+      quantity = 1,
+      cost_element = unit_cost * quantity,
+      intervention_nice = dplyr::case_when(
+        code_intervention == "cm_public" ~ "Case Management Public",
+        code_intervention == "cm_private" ~ "Case Management Private",
+        code_intervention == "iptp" ~ "IPTp",
+        code_intervention == "vacc" ~ "Vaccine",
+        code_intervention == "itn_routine" ~ "Routine ITN",
+        code_intervention == "itn_campaign" ~ "Campaign ITN",
+        code_intervention == "smc" ~ "SMC",
+        code_intervention == "pmc" ~ "PMC",
+        code_intervention == "irs" ~ "IRS",
+        code_intervention == "lsm" ~ "LSM",
+        TRUE ~ code_intervention
+      )
+    ) |>
+    dplyr::select(
+      adm1, adm2, adm3, year,
+      scenario_name, scenario_description,
+      cost_name, cost_description,
+      code_intervention, type_intervention,
+      target_pop, unit, quantity,
+      cost_class, currency, unit_cost, cost_element,
+      intervention_nice
+    )
+```
+
+
+## Output data frame
+
+```{r eval = FALSE, collapse=TRUE}
+#| code-fold: true
+
+budget_final <- dplyr::bind_rows(budget, fixed_budget) |>
+    dplyr::select(dplyr::all_of(c(
+      spu_cols, "year",
+      "scenario_name", "scenario_description",
+      "cost_name", "cost_description",
+      "code_intervention", "type_intervention",
+      "target_pop", "unit", "quantity",
+      "cost_class", "currency", "unit_cost", "cost_element",
+      "intervention_nice"
+    )))
+
+  # --- ASSUMPTION SUMMARY & PLAN ID -----------------------------------------
+  assumption_summary <- if (length(assumption_list) > 0) {
+    paste(names(assumption_list), unlist(assumption_list), sep = " = ", collapse = "; ")
+  } else {
+    "default values"
+  }
+
+  budget_final <- budget_final |>
+    dplyr::mutate(
+      assumptions_changes = assumption_summary,
+      assumption_type = dplyr::if_else(assumption_summary == "default values", "baseline assumptions", "adjusted assumptions"),
+      plan_id = paste0(scenario_name, " with ", cost_name, " with ", assumption_type),
+      plan_id = dplyr::if_else(
+        assumption_type == "adjusted assumptions",
+        paste0(plan_id, " (", assumptions_changes, ")"),
+        plan_id
+      )
+    )
+
+  # Final return
+  return(budget_final)
+}
+```
+
+Final budget dataframe includes the following columns:
+
+```         
+ [1] "adm1"                 "adm2"                
+ [3] "adm3"                 "year"                
+ [5] "scenario_name"        "scenario_description"
+ [7] "cost_name"            "cost_description"    
+ [9] "code_intervention"    "type_intervention"   
+[11] "target_pop"           "unit"                
+[13] "quantity"             "cost_class"          
+[15] "currency"             "unit_cost"           
+[17] "cost_element"         "intervention_nice"   
+[19] "assumptions_changes"  "assumption_type"     
+[21] "plan_id"              "file_path"    
+```
+This dataset is kept at the `spatial_planning_unit` scale and with **itemised interventio cost components**. During the visualisation component of our tool is when data is aggregated up to give us a National summary of the total expected cost for a scenario along with intervention specific total costs.
+
+::: {#nte-missing .callout-note title="Missing Methodology"}
+-   **IRS** (quantification & costing): wall surface area, sprayable structures, insecticide sachets, spray days, teams, PPE, transport, subnational rotation of insecticides.
+    -   To estimate the amount of insecticide required for an IRS spray round, the following is needed: N: number of houses to be sprayed (expressed as the percentage of modern and traditional structures); S: average sprayable surface per house in m2 (modern and traditional structures); C: concentration of AI in the formulation (% AI); and Y: target dosage, expressed in g/m2 (application rate), of insecticide to be used on each type of structure according to the product’s label.
+
+        Insecticide needed = (S \* Y \* 100 / C) \* N
+-   **Case management**: incidence‑based quantification (RDTs, ACTs, Severe malaria treatments (Artesunate, RAS) and consumables), facility vs community delivery mixes, private sector subsidies.
+-   **MDA:** Target population, Number of rounds, Number of doses, Coverage Buffer and expected drug types (different to first line treatment).
+-   **Larval Source Management** (quantification and costing): depending on approach to be used (habitat modification, larviciding, biological control.
+-   **Surveillance/M&E**: entomological monitoring, routine surveillance strengthening.
+-   **Funding source assignment**: mapping lines to funders for gap analysis.
+-   **Subnational unit costs**: full support for SPU‑scoped cost lines in joins.
+-   **Plus Others directed by the program**
+
+Each item will be integrated with the same pattern: **quantify → multiply by unit costs → aggregate** or **fixed cost approach**
+
+In addidition we still need to improve our current coding functionality to allow some more flexibility in matching unit costs correctly and clean our codebase/ stress test this further. 
+:::
+
+# Full core function 
+
+```{r eval = FALSE}
+# =============================================================================
+# File: helpers/10-generate-budget.R
+# Purpose: Budget generation: quantify requirements, apply unit costs, build long budget
+# Depends on: dplyr, tidyr, purrr, tibble, rlang, tidyselect, stats; internal: `%||%` (from 00-utils-base.R); globals: spatial_planning_unit, local_currency_symbol, target_population
+# =============================================================================
+
+#' Generate detailed intervention budget from scenarios & costs
+#'
+#' Quantifies product/service needs from scenario coverage, applies unit costs,
+#' and returns a long-form budget suitable for tables/maps/plots.
+#'
+#' @param scen_data Data frame of implementation scenarios. Must include columns:
+#'   - Spatial keys: `adm1`, `adm2` (and optionally `adm3`) depending on SPU.
+#'   - `year`, `scenario_name`, `scenario_description`
+#'   - intervention code columns like `code_itn_campaign`, `code_itn_routine`, `code_iptp`,
+#'     `code_smc`, `code_pmc`, `code_vacc`, and corresponding `type_*` columns.
+#' @param cost_data Data frame of unit/delivery costs containing at least:
+#'   `code_intervention`, `type_intervention`, `unit`, `local_currency_cost`, `usd_cost`,
+#'   and `cost_year_for_analysis` (may be NA, in which case it is matched to scenario year).
+#' @param assumptions Character vector of "Label = value" strings; optional.
+#'
+#' @return A data frame with columns (subset depending on SPU):\n#'   `adm1`, `adm2`, `adm3`, `year`, `scenario_name`, `scenario_description`,\n#'   `cost_name`, `cost_description`, `code_intervention`, `type_intervention`,\n#'   `target_pop`, `unit`, `quantity`, `cost_class`, `currency`, `unit_cost`,\n#'   `cost_element`, `intervention_nice`, `assumptions_changes`, `assumption_type`, `plan_id`.
+#' @details
+#' - Expects global `spatial_planning_unit` to be set to "adm1"/"adm2"/"adm3".
+#' - Expects global `local_currency_symbol` (used to label non-USD currency rows).
+#' - Expects global `target_population` table with the necessary population columns.
+#' - Assumption parsing: strings of form `"Label = value"` are evaluated on the right-hand side.
+#' - Fixed costs in `cost_data` (where `type_intervention == "Fixed cost"`) are applied nationally.
+#' - Output keeps both currencies by pivoting cost columns to `currency` and `unit_cost`.
+#'
+#' @family helpers-budget
+#' @noRd
+generate_budget <- function(scen_data, cost_data, assumptions) {
+  # --- ENV OPTIONS ----------------------------------------------------------
+  # spatial level + currency symbol
+  spu <- get("spatial_planning_unit", envir = .GlobalEnv) %||% "adm2"
+  local_symbol <- get("local_currency_symbol", envir = .GlobalEnv) %||% "LOCAL"
+
+  # validate spatial_planning_unit
+  if (!spu %in% c("adm1", "adm2", "adm3")) {
+    warning("Unrecognized spatial_planning_unit = '", spu, "'. Falling back to 'adm2'.")
+    spu <- "adm2"
+  }
+
+  # Which spatial columns to include in outputs / joins
+  spu_cols <- switch(spu,
+    "adm1" = c("adm1"),
+    "adm2" = c("adm1", "adm2"),
+    "adm3" = c("adm1", "adm2", "adm3")
+  )
+
+  sel_spu <- function(...) dplyr::all_of(c(spu_cols, ...))
+
+  # --- CONSOLE SUMMARY ------------------------------------------------------
+  cat("Costing scenario being generated for the following mix of interventions:\n")
+
+  code_cols <- grep("^code_", names(scen_data), value = TRUE)
+  if (length(code_cols) == 0L) {
+    cat("No intervention columns starting with 'code_'; skipping summary.\n")
+  } else {
+    has1 <- "adm1" %in% names(scen_data)
+    has2 <- all(c("adm1", "adm2") %in% names(scen_data))
+    has3 <- all(c("adm1", "adm2", "adm3") %in% names(scen_data))
+
+    summary_tbl <-
+      scen_data %>%
+      dplyr::mutate(
+        year = suppressWarnings(as.integer(year)),
+        adm1_key = if (has1) adm1 else NA_character_,
+        adm2_key = if (has2) paste(adm1, adm2, sep = "_") else NA_character_,
+        adm3_key = if (has3) paste(adm1, adm2, adm3, sep = "_") else NA_character_
+      ) %>%
+      dplyr::select(
+        dplyr::any_of(c(
+          spu_cols, "year", "scenario_name", "scenario_description",
+          code_cols, "adm1_key", "adm2_key", "adm3_key"
+        ))
+      ) %>%
+      tidyr::pivot_longer(
+        dplyr::all_of(code_cols),
+        names_to = "intervention",
+        names_prefix = "code_",
+        values_to = "included"
+      ) %>%
+      dplyr::mutate(
+        included = dplyr::case_when(
+          is.logical(included) ~ as.integer(included),
+          is.numeric(included) ~ as.integer(included == 1),
+          is.character(included) ~ as.integer(tolower(trimws(included)) %in% c("1", "true", "yes", "y")),
+          TRUE ~ 0L
+        )
+      ) %>%
+      dplyr::filter(included == 1L) %>%
+      dplyr::group_by(intervention, year) %>%
+      dplyr::summarise(
+        adm1_targeted = if (has1) dplyr::n_distinct(adm1_key[!is.na(adm1_key)]) else NA_integer_,
+        adm2_targeted = if (has2) dplyr::n_distinct(adm2_key[!is.na(adm2_key)]) else NA_integer_,
+        adm3_targeted = if (has3) dplyr::n_distinct(adm3_key[!is.na(adm3_key)]) else NA_integer_,
+        .groups = "drop"
+      )
+    print(summary_tbl)
+  }
+
+  cat(scen_data$scenario_description[1] %||% "", "\n")
+
+  # --- COST DATA ------------------------------------------------------------
+  cost_data <- cost_data |>
+    dplyr::filter(!is.na(local_currency_cost)) |>
+    dplyr::mutate(cost_year_for_analysis = as.integer(cost_year_for_analysis))
+
+  cost_data_expanded <- scen_data |>
+    dplyr::distinct(year) |>
+    tidyr::crossing(cost_data) |>
+    dplyr::mutate(
+      cost_year_for_analysis = dplyr::if_else(is.na(cost_year_for_analysis), year, cost_year_for_analysis)
+    ) |>
+    dplyr::filter(cost_year_for_analysis == year)
+
+  # --- ASSUMPTIONS ----------------------------------------------------------
+  assumptions <- unlist(assumptions)
+  target_population <- target_population
+
+  if (!is.null(assumptions) && length(assumptions) > 0) {
+    assumption_list <- purrr::map_chr(assumptions, ~.x) |>
+      rlang::set_names(purrr::map_chr(strsplit(assumptions, " = "), 1)) |>
+      purrr::map(~ eval(parse(text = strsplit(.x, " = ")[[1]][2])))
+  } else {
+    assumption_list <- list()
+  }
+
+  get_assumption <- function(label, default) {
+    if (!is.null(assumption_list[[label]])) assumption_list[[label]] else default
+  }
+
+  itn_campaign_divisor <- get_assumption("ITN Campaign: people per net", 1.8)
+  itn_campaign_bale_size <- get_assumption("ITN Campaign: nets per bale", 50)
+  itn_campaign_buffer_mult <- 1 + get_assumption("ITN Campaign: buffer (%)", 0.10)
+  itn_campaign_coverage <- get_assumption("ITN Campaign: target population coverage", 1.00)
+
+  itn_routine_coverage <- get_assumption("ITN Routine: target population coverage", 0.30)
+  itn_routine_buffer_mult <- 1 + get_assumption("ITN Routine: buffer (%)", 0.10)
+
+  iptp_anc_coverage <- get_assumption("IPTp: ANC attendance", 0.80)
+  iptp_doses_per_pw <- get_assumption("IPTp: contact points", 3)
+  iptp_buffer_mult <- 1 + get_assumption("IPTp: drug supply buffer", 0.10)
+
+  smc_age_string <- get_assumption("SMC: age targeting", "0.18,0.77")
+  smc_split <- as.numeric(strsplit(smc_age_string, ",")[[1]])
+  smc_pop_prop_3_11 <- smc_split[1]
+  smc_pop_prop_12_59 <- smc_split[2]
+  smc_coverage <- get_assumption("SMC: target population coverage", 1.00)
+  smc_monthly_rounds <- get_assumption("SMC: cycles", 4)
+  smc_buffer_mult <- 1 + get_assumption("SMC: drug supply buffer", 0.10)
+
+  pmc_coverage <- get_assumption("PMC: coverage", 0.85)
+  pmc_touchpoints <- get_assumption("PMC: contact points", 4)
+  pmc_tablet_factor <- get_assumption("PMC: nutrition scaling factor", 0.75)
+  pmc_buffer_mult <- 1 + get_assumption("PMC: drug supply buffer", 0.10)
+
+  vacc_coverage <- get_assumption("Vaccine: coverage", 0.84)
+  vacc_doses_per_child <- get_assumption("Vaccine: number of doses", 4)
+  vacc_buffer_mult <- 1 + get_assumption("Vaccine: supply buffer", 0.10)
+
+  get_pop_column <- function(label, default_col) {
+    pop_assumption <- assumption_list[[label]]
+    if (is.null(pop_assumption)) {
+      return(default_col)
+    }
+
+    mapping <- list(
+      "Total population"                           = "pop_total",
+      "Children under 5"                           = "pop_0_5",
+      "Children under 5 and pregnant women"        = c("pop_0_5", "pop_pw"),
+      "Children under 10"                          = c("pop_0_5", "pop_5_10"),
+      "Children 3 months to 5 years"               = "pop_0_5",
+      "Children 3 months to 10 years"              = c("pop_0_5", "pop_5_10"),
+      "Children 0-1"                               = "pop_0_1",
+      "Children 1-2"                               = "pop_1_2",
+      "Children 5-10"                              = "pop_5_10",
+      "Children 5–36 months"                       = "pop_vaccine_5_36_months",
+      "Pregnant women"                             = "pop_pw",
+      "Urban population"                           = "pop_urban"
+    )
+
+    mapped_col <- mapping[[pop_assumption]]
+    if (!is.null(mapped_col)) {
+      mapped_col
+    } else {
+      warning(paste("Unrecognized target population assumption:", pop_assumption))
+      default_col
+    }
+  }
+
+  itn_campaign_pop_col <- get_pop_column("ITN Campaign: target population", "pop_total")
+  itn_routine_pop_col <- get_pop_column("ITN Routine: target population", c("pop_0_5", "pop_pw"))
+  smc_pop_col <- get_pop_column("SMC: target population", "pop_0_5")
+
+  # --- QUANTIFICATION HELPERS -----------------------------------------------
+  join_keys <- spu_cols
+
+  safe_quantification <- function(df) {
+    if (nrow(df) == 0) {
+      tibble::tibble(
+        adm1 = character(), adm2 = character(), adm3 = character(), year = integer(),
+        scenario_name = character(), scenario_description = character(),
+        code_intervention = character(), type_intervention = character(),
+        target_pop = numeric(), unit = character(), quantity = numeric()
+      )
+    } else {
+      df
+    }
+  }
+
+  # --- ITN CAMPAIGN ----------------------------------------------------------
+  itn_campaign_quantifications <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("itn_campaign"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_itn_campaign == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", itn_campaign_pop_col))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::rowwise() |>
+    dplyr::mutate(target_pop = sum(dplyr::c_across(dplyr::all_of(itn_campaign_pop_col)), na.rm = TRUE)) |>
+    dplyr::ungroup() |>
+    dplyr::select(-dplyr::all_of(itn_campaign_pop_col)) |>
+    dplyr::mutate(
+      quant_nets = ((target_pop * itn_campaign_coverage) / itn_campaign_divisor) * itn_campaign_buffer_mult,
+      quant_bales = quant_nets / itn_campaign_bale_size,
+      target_pop = target_pop * itn_campaign_coverage,
+      code_intervention = "itn_campaign",
+      type_intervention = type_itn_campaign
+    ) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_"
+    ) |>
+    dplyr::mutate(unit = dplyr::case_when(
+      unit == "nets" ~ "per ITN",
+      unit == "bales" ~ "per bale",
+      TRUE ~ unit
+    ))
+
+  # --- ITN ROUTINE -----------------------------------------------------------
+  itn_routine_quantifications <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("itn_routine"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_itn_routine == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", itn_routine_pop_col))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::rowwise() |>
+    dplyr::mutate(target_pop = sum(dplyr::c_across(dplyr::all_of(itn_routine_pop_col)), na.rm = TRUE)) |>
+    dplyr::ungroup() |>
+    dplyr::select(-dplyr::all_of(itn_routine_pop_col)) |>
+    dplyr::mutate(
+      quant_nets = (target_pop * itn_routine_coverage) * itn_routine_buffer_mult,
+      code_intervention = "itn_routine",
+      type_intervention = type_itn_routine
+    ) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_"
+    ) |>
+    dplyr::mutate(unit = dplyr::case_when(
+      unit == "nets" ~ "per ITN",
+      unit == "bales" ~ "per bale",
+      TRUE ~ unit
+    ))
+
+  # --- IPTp ------------------------------------------------------------------
+  iptp_quantifications <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("iptp"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_iptp == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", "pop_pw"))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::mutate(
+      quant_sp_doses = ((pop_pw * iptp_anc_coverage) * iptp_doses_per_pw) * iptp_buffer_mult,
+      target_pop = pop_pw,
+      code_intervention = "iptp",
+      type_intervention = type_iptp
+    ) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_"
+    ) |>
+    dplyr::mutate(unit = dplyr::case_when(unit == "sp_doses" ~ "per SP", TRUE ~ unit))
+
+  # --- SMC -------------------------------------------------------------------
+  include_5_10 <- any(grepl("5_10", smc_pop_col))
+  smc_quantification <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("smc"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_smc == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", smc_pop_col))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::mutate(
+      quant_smc_spaq_3_11_months = ((pop_0_5 * smc_pop_prop_3_11) * smc_coverage) * smc_monthly_rounds * smc_buffer_mult,
+      quant_smc_spaq_12_59_months = ((pop_0_5 * smc_pop_prop_12_59) * smc_coverage) * smc_monthly_rounds * smc_buffer_mult,
+      quant_smc_spaq_5_10_years = if (include_5_10) (pop_5_10 * smc_coverage) * smc_monthly_rounds * smc_buffer_mult else 0,
+      quant_smc_child = if (include_5_10) {
+        ((pop_0_5 * (smc_pop_prop_3_11 + smc_pop_prop_12_59)) + pop_5_10) * smc_coverage
+      } else {
+        (pop_0_5 * (smc_pop_prop_3_11 + smc_pop_prop_12_59)) * smc_coverage
+      },
+      target_pop = quant_smc_child,
+      code_intervention = "smc",
+      type_intervention = type_smc
+    ) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_smc_"
+    ) |>
+    dplyr::mutate(
+      unit = dplyr::case_when(
+        unit == "spaq_3_11_months" ~ "per SPAQ pack 3-11 month olds",
+        unit == "spaq_12_59_months" ~ "per SPAQ pack 12-59 month olds",
+        unit == "spaq_5_10_years" ~ "per SPAQ pack 5–10 years old",
+        unit == "child" ~ "per child",
+        TRUE ~ unit
+      )
+    )
+
+  # --- PMC -------------------------------------------------------------------
+  pmc_quantification <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("pmc"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_pmc == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", "pop_0_1", "pop_1_2"))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::mutate(
+      quant_pmc_sp_0_1_years = pop_0_1 * pmc_coverage * pmc_touchpoints * pmc_tablet_factor * pmc_buffer_mult,
+      quant_pmc_sp_1_2_years = pop_1_2 * pmc_coverage * pmc_touchpoints * 2 * pmc_tablet_factor * pmc_buffer_mult,
+      quant_pmc_sp_total     = quant_pmc_sp_0_1_years + quant_pmc_sp_1_2_years,
+      quant_pmc_child        = pop_0_1 * pmc_coverage + pop_1_2 * pmc_coverage,
+      target_pop             = quant_pmc_child,
+      code_intervention      = "pmc",
+      type_intervention      = type_pmc
+    ) |>
+    dplyr::select(-quant_pmc_sp_0_1_years, -quant_pmc_sp_1_2_years) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_pmc_"
+    ) |>
+    dplyr::mutate(
+      unit = dplyr::case_when(
+        unit == "sp_total" ~ "per SP",
+        unit == "child" ~ "per child",
+        TRUE ~ unit
+      )
+    )
+
+  # --- VACCINE ---------------------------------------------------------------
+  vacc_quantification <-
+    scen_data |>
+    dplyr::select(
+      dplyr::all_of(c(spu_cols, "year")), dplyr::contains("vacc"),
+      scenario_name, scenario_description
+    ) |>
+    dplyr::filter(code_vacc == 1) |>
+    dplyr::left_join(
+      target_population |>
+        dplyr::select(dplyr::all_of(c(spu_cols, "year", "pop_vaccine_5_36_months"))),
+      by = c(stats::setNames(join_keys, join_keys), "year" = "year")
+    ) |>
+    dplyr::mutate(
+      quant_vacc_doses = pop_vaccine_5_36_months * vacc_coverage * vacc_buffer_mult * vacc_doses_per_child,
+      quant_vacc_child = pop_vaccine_5_36_months * vacc_coverage,
+      target_pop = quant_vacc_child,
+      code_intervention = "vacc",
+      type_intervention = type_vacc
+    ) |>
+    tidyr::pivot_longer(
+      cols = dplyr::starts_with("quant"),
+      names_to = "unit", values_to = "quantity", names_prefix = "quant_vacc_"
+    ) |>
+    dplyr::mutate(
+      unit = dplyr::case_when(
+        unit == "doses" ~ "per dose",
+        unit == "child" ~ "per child",
+        TRUE ~ unit
+      )
+    )
+
+  # --- COMBINE & COST --------------------------------------------------------
+  budget <-
+    dplyr::bind_rows(
+      safe_quantification(itn_campaign_quantifications),
+      safe_quantification(itn_routine_quantifications),
+      safe_quantification(iptp_quantifications),
+      safe_quantification(smc_quantification),
+      safe_quantification(pmc_quantification),
+      safe_quantification(vacc_quantification)
+    ) |>
+    dplyr::left_join(
+      cost_data_expanded |> dplyr::select(-year, -original_unit_cost),
+      by = c("code_intervention", "type_intervention", "unit", "year" = "cost_year_for_analysis")
+    ) |>
+    tidyr::pivot_longer(
+      cols = tidyselect::ends_with("_cost"),
+      names_to = "currency",
+      values_to = "unit_cost"
+    ) |>
+    dplyr::mutate(
+      cost_element = quantity * unit_cost,
+      currency = dplyr::if_else(currency == "usd_cost", "USD", local_symbol),
+      intervention_nice = dplyr::case_when(
+        code_intervention == "cm_public" ~ "Case Management Public",
+        code_intervention == "cm_private" ~ "Case Management Private",
+        code_intervention == "iptp" ~ "IPTp",
+        code_intervention == "vacc" ~ "Vaccine",
+        code_intervention == "itn_routine" ~ "Routine ITN",
+        code_intervention == "itn_campaign" ~ "Campaign ITN",
+        code_intervention == "smc" ~ "SMC",
+        code_intervention == "pmc" ~ "PMC",
+        code_intervention == "irs" ~ "IRS",
+        code_intervention == "lsm" ~ "LSM",
+        TRUE ~ code_intervention
+      )
+    ) |>
+    dplyr::select(
+      dplyr::all_of(spu_cols), year,
+      scenario_name, scenario_description,
+      cost_name, cost_description,
+      code_intervention, type_intervention,
+      target_pop, unit, quantity,
+      cost_class, currency, unit_cost, cost_element,
+      intervention_nice
+    ) |>
+    dplyr::filter(cost_element != 0)
+
+  # Fixed costs (national-level currently)
+  fixed_budget <- cost_data_expanded |>
+    dplyr::filter(type_intervention == "Fixed cost") |>
+    tidyr::pivot_longer(
+      cols = tidyselect::ends_with("_cost"),
+      names_to = "currency",
+      values_to = "unit_cost"
+    ) |>
+    dplyr::mutate(
+      currency = dplyr::if_else(currency == "usd_cost", "USD", local_symbol),
+      adm1 = NA_character_, adm2 = NA_character_, adm3 = NA_character_,
+      scenario_name = unique(scen_data$scenario_name)[1],
+      scenario_description = unique(scen_data$scenario_description)[1],
+      cost_name = cost_data$cost_name[1],
+      cost_description = cost_data$cost_description[1],
+      target_pop = NA_real_,
+      quantity = 1,
+      cost_element = unit_cost * quantity,
+      intervention_nice = dplyr::case_when(
+        code_intervention == "cm_public" ~ "Case Management Public",
+        code_intervention == "cm_private" ~ "Case Management Private",
+        code_intervention == "iptp" ~ "IPTp",
+        code_intervention == "vacc" ~ "Vaccine",
+        code_intervention == "itn_routine" ~ "Routine ITN",
+        code_intervention == "itn_campaign" ~ "Campaign ITN",
+        code_intervention == "smc" ~ "SMC",
+        code_intervention == "pmc" ~ "PMC",
+        code_intervention == "irs" ~ "IRS",
+        code_intervention == "lsm" ~ "LSM",
+        TRUE ~ code_intervention
+      )
+    ) |>
+    dplyr::select(
+      adm1, adm2, adm3, year,
+      scenario_name, scenario_description,
+      cost_name, cost_description,
+      code_intervention, type_intervention,
+      target_pop, unit, quantity,
+      cost_class, currency, unit_cost, cost_element,
+      intervention_nice
+    )
+
+  budget_final <- dplyr::bind_rows(budget, fixed_budget) |>
+    dplyr::select(dplyr::all_of(c(
+      spu_cols, "year",
+      "scenario_name", "scenario_description",
+      "cost_name", "cost_description",
+      "code_intervention", "type_intervention",
+      "target_pop", "unit", "quantity",
+      "cost_class", "currency", "unit_cost", "cost_element",
+      "intervention_nice"
+    )))
+
+  # --- ASSUMPTION SUMMARY & PLAN ID -----------------------------------------
+  assumption_summary <- if (length(assumption_list) > 0) {
+    paste(names(assumption_list), unlist(assumption_list), sep = " = ", collapse = "; ")
+  } else {
+    "default values"
+  }
+
+  budget_final <- budget_final |>
+    dplyr::mutate(
+      assumptions_changes = assumption_summary,
+      assumption_type = dplyr::if_else(assumption_summary == "default values", "baseline assumptions", "adjusted assumptions"),
+      plan_id = paste0(scenario_name, " with ", cost_name, " with ", assumption_type),
+      plan_id = dplyr::if_else(
+        assumption_type == "adjusted assumptions",
+        paste0(plan_id, " (", assumptions_changes, ")"),
+        plan_id
+      )
+    )
+
+  return(budget_final)
+}
+
+```
+

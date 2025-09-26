@@ -3,9 +3,9 @@ Central home for the budget generation scripts used across PATH MACEPA malaria b
 
 - A single template script defines the universal `generate_budget()` logic.
 
-- Each country folder contains a minimal copy of the template with country-specific tweaks.
+- Each country folder contains a copy of the template with country-specific tweaks.
 
-- Apps source the correct script directly from GitHub Raw (country first, then fallback to template).
+- Apps source the correct script directly from GitHub (country first, then fallback to template).
 
 ## Repository Structure
 The repository is designed to be set up as follows:
@@ -13,13 +13,13 @@ The repository is designed to be set up as follows:
 ``` 
 budget-generation-function/
 ├─ template/
-│  └─ budget-generation.R        # canonical template (reference copy)
+│  └─ budget-generation.R        # Base template 
 ├─ ETH/
-│  └─ eth-budget-generation.R    # Ethiopia customization (optional)
+│  └─ eth-budget-generation.R    # Ethiopia customization 
 ├─ DRC/
-│  └─ drc-budget-generation.R    # DRC customization (optional)
+│  └─ drc-budget-generation.R    # DRC customization 
 ├─ NGA/
-│  └─ nga-budget-generation.R    # Nigeria customization (optional)
+│  └─ nga-budget-generation.R    # Nigeria customization 
 └─ README.md
 ```
 
@@ -78,16 +78,16 @@ cp template/budget-generation.R ABC/abc-budget-generation.R
 
 3. Keep the function name and signature identical: `generate_budget(scen_data, cost_data, assumptions)`.
 
-4. If multiple countries need the same tweak, consider upstreaming it into the template behind a small flag (e.g., read from assumptions).
+4. If multiple countries need the same tweak, consider upstreaming it into the template.
 
 ## Changelog
 
-- Template updates: document via Git tags/releases.
+- Template updates: document via Github commits, issues or requests.
 
 - Country scripts: add a header comment block at the top with date, editor, and a one-line change note. Example:
 ```
 # NGA override — 2025-09-23 — J.Doe
-# - Adjusted SMC cycles from 3→4; updated dose labels
+# - Adjusted SMC cycles from 3→4;  
 ``` 
 ## Maintainers
 
