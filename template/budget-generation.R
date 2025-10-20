@@ -421,7 +421,7 @@ generate_budget <- function(scen_data, cost_data, assumptions) {
       safe_quantification(vacc_quantification)
     ) |>
     dplyr::left_join(
-      cost_data_expanded |> dplyr::select(-year, -original_unit_cost),
+      cost_data_expanded |> dplyr::select(-year, -any_of("original_unit_cost")),
       by = c("code_intervention", "type_intervention", "unit", "year" = "cost_year_for_analysis")
     ) |>
     tidyr::pivot_longer(
