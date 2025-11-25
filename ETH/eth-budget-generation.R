@@ -319,16 +319,16 @@ generate_budget <- function(scen_data, cost_data, assumptions) {
     dplyr::mutate(
       quant_smc_spaq_3_11_months = ((pop_0_5 * smc_pop_prop_3_11) * smc_coverage) * smc_monthly_rounds * smc_buffer_mult,
       quant_smc_spaq_12_59_months = ((pop_0_5 * smc_pop_prop_12_59) * smc_coverage) * smc_monthly_rounds * smc_buffer_mult,
-      quant_smc_spaq_5_10_years =
-        case_when(
-          include_5_10 == TRUE ~ (pop_5_10 * smc_coverage) * smc_monthly_rounds * smc_buffer_mult,
-          TRUE ~ 0
-        ),
-      quant_smc_child =
-        case_when(
-          include_5_10 == TRUE ~ ((pop_0_5 * (smc_pop_prop_3_11 + smc_pop_prop_12_59)) + pop_5_10) * smc_coverage,
-          TRUE ~ (pop_0_5 * (smc_pop_prop_3_11 + smc_pop_prop_12_59)) * smc_coverage
-        ),
+      quant_smc_spaq_5_10_years = 0,
+      # dplyr::case_when(
+      #   include_5_10 == TRUE ~ (pop_5_10 * smc_coverage) * smc_monthly_rounds * smc_buffer_mult,
+      #   TRUE ~ 0
+      # ),
+      quant_smc_child = (pop_0_5 * (smc_pop_prop_3_11 + smc_pop_prop_12_59)) * smc_coverage,
+      # dplyr::case_when(
+      #   include_5_10 == TRUE ~ ((pop_0_5 * (smc_pop_prop_3_11 + smc_pop_prop_12_59)) + pop_5_10) * smc_coverage,
+      #   TRUE ~ (pop_0_5 * (smc_pop_prop_3_11 + smc_pop_prop_12_59)) * smc_coverage
+      # ),
       target_pop = quant_smc_child,
       code_intervention = "smc",
       type_intervention = type_smc
